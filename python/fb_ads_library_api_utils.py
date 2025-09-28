@@ -42,6 +42,7 @@ supported_countries = [
     "SK",
     "UA",
     "US",
+    "TN",
 ]
 valid_query_fields = [
     "ad_creation_time",

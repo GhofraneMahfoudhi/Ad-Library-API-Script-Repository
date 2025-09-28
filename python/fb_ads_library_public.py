@@ -17,19 +17,6 @@ def get_parser():
     parser = argparse.ArgumentParser(
         description="The Facebook Ads Library API CLI Utility"
     )
-    parser.add_argument(
-        "-t",
-        "--access-token",
-        help="The Facebook developer access token",
-        required=True,
-    )
-    parser.add_argument(
-        "-f",
-        "--fields",
-        help="Fields to retrieve from the Ad Library API",
-        required=True,
-        type=validate_fields_param,
-    )
     parser.add_argument("-s", "--search-term", help="The term you want to search for")
     parser.add_argument(
         "-c",
@@ -42,14 +29,6 @@ def get_parser():
         "--search-page-ids", help="The specific Facebook Page you want to search"
     )
     parser.add_argument(
-        "--ad-active-status",
-        help="Filter by the current status of the ads at the moment the script runs",
-    )
-    parser.add_argument(
-        "--after-date", help="Only return ads that started delivery after this date"
-    )
-    parser.add_argument("--batch-size", type=int, help="Batch size")
-    parser.add_argument(
         "--retry-limit",
         type=int,
         help="When an error occurs, the script will abort if it fails to get the same batch this amount of times",
@@ -57,10 +36,36 @@ def get_parser():
     parser.add_argument("-v", "--verbose", action="store_true")
     actions = ",".join(get_operators().keys())
     parser.add_argument(
-        "action", help="Action to take on the ads, possible values: %s" % actions
+        "action",
+        nargs='?',
+        help="Action to take on the ads, possible values: %s" % actions,
     )
     parser.add_argument(
         "args", nargs=argparse.REMAINDER, help="The parameter for the specific action"
+    )
+    parser.add_argument(
+        "-f",
+        "--fields",
+        help=(
+            "Comma-separated list of fields to retrieve for each ad. "
+            "See documentation for supported fields."
+        ),
+        type=validate_fields_param,
+    )
+    parser.add_argument(
+        "--print-public-url",
+        help="Print the Ads Library public search URL for the given search and country",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--open-public-url",
+        help="Open the Ads Library public search URL in the default browser",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--use-public-fetch",
+        help="Use a headless browser to fetch Ads Library data from the public page (requires Playwright)",
+        action="store_true",
     )
     return parser
 
@@ -116,24 +121,42 @@ def main():
     else:
         search_term = opts.search_term
     api = FbAdsLibraryTraversal(
-        opts.access_token, opts.fields, search_term, opts.country
+         search_term, opts.country
     )
-    if opts.search_page_ids:
-        api.search_page_ids = opts.search_page_ids
-    if opts.ad_active_status:
-        api.ad_active_status = opts.ad_active_status
-    if opts.batch_size:
-        api.page_limit = opts.batch_size
-    if opts.retry_limit:
-        api.retry_limit = opts.retry_limit
-    if opts.after_date:
-        api.after_date = opts.after_date
-    generator_ad_archives = api.generate_ad_archives()
+    # If user only wants the public URL, print/open and exit before fetching
+    if getattr(opts, "print_public_url", False) or getattr(opts, "open_public_url", False):
+        public_url = api.get_public_search_url()
+        if getattr(opts, "print_public_url", False):
+            print(public_url)
+        if getattr(opts, "open_public_url", False):
+            try:
+                import webbrowser
+
+                webbrowser.open(public_url)
+            except Exception as e:
+                print(f"Failed to open browser: {e}")
+        sys.exit(0)
+    # For other operations, an action is required
+    if not opts.action:
+        print("'action' is required unless --print-public-url or --open-public-url is used")
+        parser.print_help()
+        sys.exit(1)
+
+    # Choose fetch method: async endpoint (default) or public-page headless fetch
+    if getattr(opts, "use_public_fetch", False):
+        try:
+            generator_ad_archives = api.generate_ad_archives_from_public_page()
+        except RuntimeError as e:
+            print(e)
+            sys.exit(1)
+    else:
+        generator_ad_archives = api.generate_ad_archives()
     if opts.action in get_operators():
         if opts.action == "save_to_csv":
-            save_to_csv(
-                generator_ad_archives, opts.args, opts.fields, is_verbose=opts.verbose
-            )
+            if not opts.fields:
+                print("The --fields parameter is required for save_to_csv action")
+                sys.exit(1)
+            save_to_csv(generator_ad_archives, opts.args, opts.fields, is_verbose=opts.verbose)
         else:
             get_operators()[opts.action](
                 generator_ad_archives, opts.args, is_verbose=opts.verbose
